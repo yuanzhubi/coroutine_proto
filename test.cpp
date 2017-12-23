@@ -44,7 +44,6 @@ struct fibonacci_cort : public cort_multi_awaitable{
     int n;
     int result;
     ~fibonacci_cort(){
-
     }
     CO_BEGIN(fibonacci_cort)
         
@@ -91,6 +90,7 @@ int main(int argc, char* argv[]){
     }
     main_task.start();
     while(pop_execute_work()){
+        //sleep(1);
     }
     printf("%d\n", main_task.result);
     return 0;
