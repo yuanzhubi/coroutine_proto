@@ -4,8 +4,6 @@
 #define CO_JOIN2(x,y) x##y 
 #define CO_JOIN(x,y) CO_JOIN2(x,y)
 
-
-
 #define CO_STATE_MAX_COUNT ((count_type)((1u<<(sizeof(count_type)*8)) - 1u)) // you can increase the number if your compiler affordable
 
 #define CO_STATE_EVAL_COUNTER(counter) (sizeof(*counter((struct_int<CO_STATE_MAX_COUNT>*)0)) \
@@ -28,6 +26,7 @@ struct cort_proto{
         cort_parent = arg;
     }
     
+    //Only useful for some rare case. Its overload form is called ususally.
     cort_proto* start() {
         return (*(this->data0.run_function))(this);
     }
@@ -45,7 +44,6 @@ struct cort_proto{
 protected:
     union{
         run_type run_function;
-
         void* result_ptr;                   //Useful to save coroutine result
         int result_int;                     //Useful to save coroutine result
     }data0;
@@ -63,14 +61,12 @@ protected:
 
 struct cort_multi_awaitable : public cort_proto {
 public: 
-
     void clear(){
         data1.next_cort = (0);
         data2.prev_cort = (0);
         cort_proto::clear();
     }
-
-    
+  
     template <typename T>
     friend cort_proto* wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator);
     
@@ -94,6 +90,7 @@ protected:
         this->data1.next_cort = rhs;
         rhs->data2.prev_cort = this;
     }
+    
     void pop_back(){
         this->data1.next_cort = 0;
     }
@@ -143,10 +140,7 @@ struct cort_example : public cort_proto{
 //Or you want to overload some member function
     //void clear(){}
     //~cort_example(){}
-
-//The default constructor(that without any argument), or constructor_impl(if your compiler does not support delegate constructor), 
-// must be called in your self-defined constructor function.
-    //cort_example(int){;;;constructor_impl();}
+    //cort_example(){}
 
 //Second using CO_BEGIN to define some useful property
 #define CO_BEGIN(cort_example) \
@@ -154,18 +148,21 @@ public: \
     typedef cort_example cort_type;\
     typedef cort_proto proto_type;\
     typedef unsigned char count_type;\
-    template<typename TTT, unsigned int M>\
+    template<typename TTT, unsigned int M = 0>\
     struct cort_state_struct;\
     const static count_type nstate = (count_type)(-1);\
-    void constructor_impl(){set_run_function((run_type)&cort_state_struct<cort_example, 0>::do_exec_static);} \
-    cort_example(){\
-        constructor_impl();                                                                     \
-    }                                                                                           \
     template<count_type N, int M = 0>                                                           \
     struct struct_int : struct_int<N - 1, 0> {};                                                \
     template<int M>                                                                             \
     struct struct_int<0, M> {};                                                                 \
     static count_type (*first_counter(...))[1];                                                 \
+    proto_type* start() {                                                                       \
+        return  ((cort_state_struct<cort_type>*)(this))->do_exec();                             \
+    }                                                                                           \
+    cort_type* init() {                                                                         \
+        set_run_function((run_type)&cort_state_struct<cort_type, 0>::do_exec_static);           \
+        return  this;                                                                           \
+    }                                                                                           \
     struct dummy{       void f(){                                                               \
     CORT_NEXT_STATE(cort_begin)                                                                 
     
@@ -207,7 +204,7 @@ public: \
 
 //After wait finished, it will not turn to next state but current. It behaves like a loop. It can not be used in any branch or loop.
 #define CO_AWAIT_BACK(sub_cort) do{ \
-        proto_type* the_sub_cort = (sub_cort)->run();\
+        proto_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
             the_sub_cort->set_parent(this); \
             this->set_run_function(cort_state_struct<CORT_BASE, state_value>::do_exec_static); \
@@ -218,7 +215,7 @@ public: \
     CORT_NEXT_STATE(CO_JOIN(CO_STATE_NAME, __LINE__))
 
 #define CO_AWAIT_MULTI_IMPL(sub_cort) {\
-    cort_multi_awaitable * __tmp_cort_new = sub_cort; \
+    cort_multi_awaitable * __tmp_cort_new = (sub_cort)->init(); \
     CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
 }
     
@@ -242,7 +239,7 @@ public: \
 
 #define CO_AWAIT_IMPL(sub_cort, cort_state_name, next_state) \
     do{ \
-        proto_type* the_sub_cort = (sub_cort)->run();\
+        proto_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
             the_sub_cort->set_parent(this); \
             this->set_run_function(cort_state_struct<CORT_BASE, next_state>::do_exec_static); \
@@ -267,7 +264,6 @@ public: \
     if(!(bool_exp)){CO_GOTO_NEXT_STATE } \
     CO_AWAIT_BACK(sub_cort)
 
-
 //Sometimes you want to exit from the couroutine. Using CO_RETURN.
 #define CO_RETURN() \
     return this->on_finish(); \
@@ -276,7 +272,7 @@ public: \
 //It must be used in a branch or loop, or else it must be followed by CO_END.
 #define CO_AWAIT_RETURN(sub_cort) \
     do{ \
-        proto_type* the_sub_cort = (sub_cort)->run();\
+        proto_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
             the_sub_cort->set_parent(this->cort_parent); \
             return the_sub_cort; \
@@ -288,16 +284,16 @@ public: \
     const static count_type state_total_count = CO_STATE_EVAL_COUNTER(first_counter) ; 
 }; 
 
+#include <iterator>
 template <typename T>
 cort_proto* wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator){
     cort_multi_awaitable* tmp_cort = 0;
     while(begin_forward_iterator != end_forward_iterator){
-        cort_multi_awaitable *tmp_cort_new = (*begin_forward_iterator); 
+        typename std::iterator_traits<T>::value_type tmp_cort_new = (*begin_forward_iterator); 
         CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, tmp_cort, tmp_cort_new) 
         ++begin_forward_iterator;
     }
     return tmp_cort;
 }
-
 
 #endif
