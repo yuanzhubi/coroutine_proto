@@ -1,7 +1,4 @@
 
-
-
-
 //Suppose we rent the cpu time in a strange old super computer and costing no more than 256 "clock" each time for example. 
 //So computing is enabled only after allowed and we need to divide our computing task into several one.
 //This is an example to simulate the IO operation that only enabled after select or (e)poll result.
@@ -14,6 +11,7 @@
 #include <stdlib.h>
 #include <stack>
 #include "cort_proto.h"
+
 std::stack<cort_proto*> scheduler_list;
 unsigned char the_clock = 1;
 
@@ -43,11 +41,15 @@ struct fibonacci_cort : public cort_multi_awaitable{
     fibonacci_cort *corts[2];
     int n;
     int result;
+    
+    //You can define anything.
     ~fibonacci_cort(){
     }
-    CO_BEGIN(fibonacci_cort)
-        
-        if(++the_clock == 0){   //Oh you are not enabled work now.
+    fibonacci_cort(int input): n(input){
+    }
+    
+    CO_BEGIN(fibonacci_cort)    
+        if(++the_clock == 0){   //Oh you are not enabled to work now.
             push_work(this);
             CO_AWAIT_AGAIN();
         }
@@ -55,21 +57,19 @@ struct fibonacci_cort : public cort_multi_awaitable{
         if(n < 2){
             result = n;
             //When the coroutine ended you can use data0 to send_back some information.
-            //Now we use it to tell the parent coroutine: it is finished without any further sub-coroutine waiting..
-            data0.result_ptr = 0;   
+            //Now we can use it to tell the parent coroutine: it is finished without any further sub-coroutine waiting..
+            data0.result_ptr = 0;   //Useless codes, just an example.
             CO_RETURN();
         }
-        corts[0] = new fibonacci_cort();
-        corts[0]->n = n - 1;
-        corts[1] = new fibonacci_cort();
-        corts[1]->n = n - 2;
+        corts[0] = new fibonacci_cort(n-1);
+        corts[1] = new fibonacci_cort(n-2);
 
         //They may cost much time so we should wait their result.
 
         //CO_AWAIT_ALL(corts[0], corts[1]); //You can place no more than ten corts to await.
         CO_AWAIT_RANGE(corts, corts+2);     //Or using forward iterator of coroutine pointer for variate count.
         
-        if(++the_clock == 0){   //Oh you are not enabled work now.
+        if(++the_clock == 0){   //Oh you are not enabled to work now.
             push_work(this);
             CO_AWAIT_AGAIN();
         }
@@ -79,15 +79,14 @@ struct fibonacci_cort : public cort_multi_awaitable{
     CO_END(fibonacci_cort)
 };
 
-
-int main(int argc, char* argv[]){
-    fibonacci_cort main_task;
+int main(int argc, char* argv[]){ 
     if(argc <= 1){
-        main_task.n = 18;
+        argc = 18;
     }
     else{
-        main_task.n = atoi(argv[1]);
+        argc = atoi(argv[1]);
     }
+    fibonacci_cort main_task(argc);
     main_task.start();
     while(pop_execute_work()){
         //sleep(1);
