@@ -66,10 +66,11 @@ public:
         data2.prev_cort = (0);
         cort_proto::clear();
     }
-  
-    template <typename T>
-    friend cort_proto* wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator);
     
+    void push_back(cort_multi_awaitable* rhs){
+        this->data1.next_cort = rhs;
+        rhs->data2.prev_cort = this;
+    }
 protected:
     cort_multi_awaitable(){
         data1.next_cort = 0;
@@ -86,15 +87,6 @@ protected:
         void* extend_info;                  //Useful for subclass(transmit some result to parent cort after on_finish)
     }data2;
 
-    void push_back(cort_multi_awaitable* rhs){
-        this->data1.next_cort = rhs;
-        rhs->data2.prev_cort = this;
-    }
-    
-    void pop_back(){
-        this->data1.next_cort = 0;
-    }
-    
     cort_proto* on_finish(){
         int all_zero = 0;           //XOR is quick
         if(data2.prev_cort != 0){
@@ -104,7 +96,6 @@ protected:
         if(data1.next_cort != 0){
             data1.next_cort->data2.prev_cort = data2.prev_cort;
             all_zero += 1;          //INCR is quick
-
         }
         if(all_zero == 0){          //TEST is quick
             return 0;
@@ -193,7 +184,7 @@ public: \
     CORT_NEXT_STATE(CO_JOIN(CO_STATE_NAME, __LINE__))
     
 #define CO_AWAIT_RANGE(sub_cort_begin, sub_cort_end) do{ \
-        if(wait_range(this, sub_cort_begin, sub_cort_end) != 0){ \
+        if(cort_wait_range(this, sub_cort_begin, sub_cort_end) != 0){ \
             this->set_run_function(cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static); \
             return this; \
         } \
@@ -214,10 +205,25 @@ public: \
     goto ____action_begin; \
     CORT_NEXT_STATE(CO_JOIN(CO_STATE_NAME, __LINE__))
 
+#if (defined(__GNUC__))
+#define CO_AWAIT_MULTI_IMPL(sub_cort) {\
+    __typeof__(sub_cort) __tmp_cort_new = (sub_cort); \
+    CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
+}
+
+#elif (defined(_MSC_VER) && (_MSC_VER>=1600))
+#define CO_AWAIT_MULTI_IMPL(sub_cort) {\
+    auto __tmp_cort_new = (sub_cort); \
+    CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
+}
+
+#else
 #define CO_AWAIT_MULTI_IMPL(sub_cort) {\
     cort_multi_awaitable * __tmp_cort_new = (sub_cort)->init(); \
     CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
 }
+#endif
+
     
 #define CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, __tmp_cort, __tmp_cort_new) {\
     __tmp_cort_new->set_parent(this_ptr); \
@@ -284,7 +290,7 @@ public: \
 
 #include <iterator>
 template <typename T>
-cort_proto* wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator){
+cort_proto* cort_wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator){
     cort_multi_awaitable* tmp_cort = 0;
     while(begin_forward_iterator != end_forward_iterator){
         typename std::iterator_traits<T>::value_type tmp_cort_new = (*begin_forward_iterator); 
