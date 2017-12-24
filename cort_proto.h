@@ -226,9 +226,6 @@ public: \
         if(__tmp_cort_new->start() != 0){ \
             __tmp_cort = __tmp_cort_new; \
         }\
-        else{ \
-            __tmp_cort->pop_back(); \
-        } \
     } \
     else { \
         if(__tmp_cort_new->start() != 0){ \
@@ -274,7 +271,8 @@ public: \
     do{ \
         proto_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
-            the_sub_cort->set_parent(this->cort_parent); \
+            /*the_sub_cort->set_parent(this->cort_parent); \
+            Above codes is not needed the caller will set the return result */ \
             return the_sub_cort; \
         }\
         CO_RETURN(); \
