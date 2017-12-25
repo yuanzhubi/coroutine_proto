@@ -17,6 +17,7 @@
 
 struct cort_proto{ 
     typedef cort_proto* (*run_type)(cort_proto*);
+    typedef cort_proto base_type;
 
     void set_run_function(run_type arg){
         data0.run_function = arg;
@@ -40,13 +41,19 @@ struct cort_proto{
     void clear(){
         cort_parent = 0;
     }
-    
-protected:
+
+private:    
     union{
         run_type run_function;
         void* result_ptr;                   //Useful to save coroutine result
         int result_int;                     //Useful to save coroutine result
     }data0;
+    
+protected:
+
+    void** get_data0(){
+        return &data0.result_ptr;
+    }
     
     cort_proto* cort_parent;
     
@@ -61,6 +68,8 @@ protected:
 
 struct cort_multi_awaitable : public cort_proto {
 public: 
+    typedef cort_multi_awaitable base_type;
+    
     void clear(){
         data1.next_cort = (0);
         data2.prev_cort = (0);
@@ -87,7 +96,7 @@ protected:
         void* extend_info;                  //Useful for subclass(transmit some result to parent cort after on_finish)
     }data2;
 
-    cort_proto* on_finish(){
+    cort_multi_awaitable* on_finish(){
         int all_zero = 0;           //XOR is quick
         if(data2.prev_cort != 0){
             data2.prev_cort->data1.next_cort = data1.next_cort;
@@ -147,11 +156,11 @@ public: \
     template<int M>                                                                             \
     struct struct_int<0, M> {};                                                                 \
     static count_type (*first_counter(...))[1];                                                 \
-    proto_type* start() {                                                                       \
+    base_type* start() {                                                                       \
         return  ((cort_state_struct<cort_type>*)(this))->do_exec();                             \
     }                                                                                           \
     cort_type* init() {                                                                         \
-        set_run_function((run_type)&cort_state_struct<cort_type, 0>::do_exec_static);           \
+        set_run_function((run_type)(&cort_state_struct<cort_type, 0>::do_exec_static));           \
         return  this;                                                                           \
     }                                                                                           \
     struct dummy{       void f(){                                                               \
@@ -163,9 +172,10 @@ public: \
     template<typename CORT_BASE>                                                                        \
     struct cort_state_struct<CORT_BASE, cort_state_name > : public CORT_BASE {                          \
         typedef cort_state_struct<CORT_BASE, cort_state_name > this_type;                               \
+        typedef typename CORT_BASE::base_type base_type;                                                \
         const static count_type state_value = cort_state_name;                                          \
-        static proto_type* do_exec_static(proto_type* this_ptr){return ((this_type*)(this_ptr))->do_exec();}\
-        inline proto_type* do_exec() { goto ____action_begin; ____action_begin:
+        static base_type* do_exec_static(proto_type* this_ptr){return ((this_type*)(this_ptr))->do_exec();}\
+        inline base_type* do_exec() { goto ____action_begin; ____action_begin:
         
 //Now you can define the coroutine function codes, using the class member as the local variable.
 
@@ -176,7 +186,7 @@ public: \
         cort_multi_awaitable* __tmp_cort = 0; \
         CO_FOR_EACH(CO_AWAIT_MULTI_IMPL, __VA_ARGS__) \
         if(__tmp_cort != 0){ \
-            this->set_run_function(cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static); \
+            this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static)); \
             return this; \
         } \
     }while(false);\
@@ -185,7 +195,7 @@ public: \
     
 #define CO_AWAIT_RANGE(sub_cort_begin, sub_cort_end) do{ \
         if(cort_wait_range(this, sub_cort_begin, sub_cort_end) != 0){ \
-            this->set_run_function(cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static); \
+            this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static)); \
             return this; \
         } \
     }while(false); \
@@ -198,7 +208,7 @@ public: \
         proto_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
             the_sub_cort->set_parent(this); \
-            this->set_run_function(cort_state_struct<CORT_BASE, state_value>::do_exec_static); \
+            this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value>::do_exec_static)); \
             return this; \
         }\
     }while(false); \
@@ -224,28 +234,23 @@ public: \
 }
 #endif
 
-    
 #define CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, __tmp_cort, __tmp_cort_new) {\
-    __tmp_cort_new->set_parent(this_ptr); \
-    if(__tmp_cort != 0){ \
-        __tmp_cort->push_back(__tmp_cort_new); \
-        if(__tmp_cort_new->start() != 0){ \
-            __tmp_cort = __tmp_cort_new; \
-        }\
-    } \
-    else { \
-        if(__tmp_cort_new->start() != 0){ \
-            __tmp_cort = __tmp_cort_new; \
-        }\
-    } \
+    cort_multi_awaitable *new_result = __tmp_cort_new->start(); \
+    if(new_result != 0){ \
+        new_result->set_parent(this_ptr); \
+        if(__tmp_cort != 0){ \
+            __tmp_cort->push_back(new_result); \
+        } \
+        __tmp_cort = new_result; \
+    }\
 }
 
 #define CO_AWAIT_IMPL(sub_cort, cort_state_name, next_state) \
     do{ \
-        proto_type* the_sub_cort = (sub_cort)->start();\
+        base_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
             the_sub_cort->set_parent(this); \
-            this->set_run_function(cort_state_struct<CORT_BASE, next_state>::do_exec_static); \
+            this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, next_state>::do_exec_static)); \
             return this; \
         }\
     }while(false); \
@@ -255,7 +260,7 @@ public: \
 #define CO_GOTO_NEXT_STATE return ((cort_state_struct<CORT_BASE, state_value + 1>*)(this))->do_exec();
 
 #define CO_AWAIT_AGAIN() do{ \
-    this->set_run_function(cort_state_struct<CORT_BASE, state_value>::do_exec_static);  \
+    this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value>::do_exec_static));  \
     return this; \
 }while(false)
 
@@ -273,9 +278,10 @@ public: \
 
 //Sometimes you want to stop the couroutine after a sub_coroutine is finished. Using CO_AWAIT_RETURN.
 //It must be used in a branch or loop, or else it must be followed by CO_END.
+//The "this" pointer and "sub_cort" must have the same base_type to avoid type degrade of the return result.
 #define CO_AWAIT_RETURN(sub_cort) \
     do{ \
-        proto_type* the_sub_cort = (sub_cort)->start();\
+        base_type* the_sub_cort = (sub_cort)->start();\
         if(the_sub_cort != 0){\
             /*the_sub_cort->set_parent(this->cort_parent); \
             Above codes is not needed the caller will set the return result */ \
