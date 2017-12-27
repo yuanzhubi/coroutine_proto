@@ -36,8 +36,7 @@ bool pop_execute_work(){
 }
 
 struct fibonacci_cort;
-struct fibonacci_cort : public cort_multi_awaitable{
-    
+struct fibonacci_cort : public cort_proto{
     fibonacci_cort *corts[2];
     int n;
     int result;
@@ -56,9 +55,6 @@ struct fibonacci_cort : public cort_multi_awaitable{
     
         if(n < 2){
             result = n;
-            //When the coroutine ended you can use data0 to send_back some information.
-            //Now we can use it to tell the parent coroutine: it is finished without any further sub-coroutine waiting..
-            data0.result_ptr = 0;   //Useless codes, just an example.
             CO_RETURN();
         }
         corts[0] = new fibonacci_cort(n-1);
@@ -66,8 +62,8 @@ struct fibonacci_cort : public cort_multi_awaitable{
 
         //They may cost much time so we should wait their result.
 
-        //CO_AWAIT_ALL(corts[0], corts[1]); //You can place no more than ten corts to await.
-        CO_AWAIT_RANGE(corts, corts+2);     //Or using forward iterator of coroutine pointer for variate count.
+        CO_AWAIT_ALL(corts[0], corts[1]); //You can place no more than ten corts for CO_AWAIT_ALL.
+        //CO_AWAIT_RANGE(corts, corts+2);     //Or using forward iterator of coroutine pointer for variate count.
         
         if(++the_clock == 0){   //Oh you are not enabled to work now.
             push_work(this);
