@@ -27,14 +27,37 @@ struct cort_proto{
         cort_parent = arg;
     }
     
+    void set_wait_count(size_t wait_count){
+        this->data1.wait_count = wait_count;
+    }
+    
+    void incr_wait_count(size_t wait_count){
+        this->data1.wait_count += wait_count;
+    }
+    
     //Only useful for some rare case. Its overload form is called ususally.
+    //It is behave like a virtual function. So if you want to call cort_proto::start, 
+    //you MUST call "init" function in subclass first to initialize the "virtual table pointer".
     cort_proto* start() {
         return (*(this->data0.run_function))(this);
     }
     
+    //Some times outer code want this coroutine to wait some more coroutines that it does not know.
+    //Await can be only called after "this" coroutine is awaiting at least one coroutine now or CO_AWAIT_ANY.
+    //It must is guranteed that the "this" coroutine is alive when subcoroutine is finished.
+    template<typename T>
+    cort_proto* await(T* sub_cort){
+        cort_proto* __the_sub_cort = sub_cort->start();
+        if(__the_sub_cort != 0){
+            __the_sub_cort->set_parent(this); 
+            this->incr_wait_count(1); 
+            return this; 
+        }
+    }
+    
     void resume() {
-        if((*(this->data0.run_function))(this) == 0 && cort_parent != 0){
-             cort_parent->resume();
+        if((*(this->data0.run_function))(this) == 0 && cort_parent != 0 && (--(cort_parent->data1.wait_count)) == 0){
+            cort_parent->resume();
         }
     }
     
@@ -42,21 +65,20 @@ struct cort_proto{
         cort_parent = 0;
     }
 
-private:    
+private:
     union{
         run_type run_function;
         void* result_ptr;                   //Useful to save coroutine result
-        int result_int;                     //Useful to save coroutine result
+        size_t result_int;                  //Useful to save coroutine result
     }data0;
-    
-protected:
-
-    void** get_data0(){
-        return &data0.result_ptr;
-    }
-    
+    union{
+        size_t wait_count;
+        void* result_ptr;                   //Useful to save coroutine result
+        size_t result_int;                  //Useful to save coroutine result
+    }data1;
     cort_proto* cort_parent;
     
+protected:
     cort_proto():cort_parent(0){}   
     
     ~cort_proto(){}                 //only used as weak reference so public virtual destructor is not needed.
@@ -64,54 +86,14 @@ protected:
     inline cort_proto* on_finish(){
         return 0;
     }
-};                                                                 
-
-struct cort_multi_awaitable : public cort_proto {
-public: 
-    typedef cort_multi_awaitable base_type;
     
-    void clear(){
-        data1.next_cort = (0);
-        data2.prev_cort = (0);
-        cort_proto::clear();
+    void** get_data0(){
+        return &data0.result_ptr;
     }
-    
-    void push_back(cort_multi_awaitable* rhs){
-        this->data1.next_cort = rhs;
-        rhs->data2.prev_cort = this;
+    void** get_data1(){
+        return &data1.result_ptr;
     }
-protected:
-    cort_multi_awaitable(){
-        data1.next_cort = 0;
-        data2.prev_cort = 0;
-    }
-
-    union{
-        cort_multi_awaitable* next_cort;                //Input
-        void* extend_info;                  //Useful for subclass(transmit some result to parent cort after on_finish)
-    }data1;
-    
-    union{
-        cort_multi_awaitable* prev_cort;                //Input
-        void* extend_info;                  //Useful for subclass(transmit some result to parent cort after on_finish)
-    }data2;
-
-    cort_multi_awaitable* on_finish(){
-        int all_zero = 0;           //XOR is quick
-        if(data2.prev_cort != 0){
-            data2.prev_cort->data1.next_cort = data1.next_cort;
-            all_zero += 1;          //INCR is quick
-        }
-        if(data1.next_cort != 0){
-            data1.next_cort->data2.prev_cort = data2.prev_cort;
-            all_zero += 1;          //INCR is quick
-        }
-        if(all_zero == 0){          //TEST is quick
-            return 0;
-        }
-        return this;
-    }
-};    
+};                                                                  
 
 #define CO_GET_NTH_ARG(_0, _1, _2, _3, _4, _5, _6, _7, _8, _9, N, ...) N
 
@@ -132,7 +114,6 @@ protected:
     
 // Now let us show an example.
 struct cort_example : public cort_proto{
-//If we use "struct cort_example : public cort_multi_awaitable", it means the cort_example can be waited parallely with other cort_multi_awaitable.
 
 //First put all your context here as class member.
     //int run_times;
@@ -183,9 +164,10 @@ public: \
 #define CO_AWAIT(sub_cort) CO_AWAIT_IMPL(sub_cort, CO_JOIN(CO_STATE_NAME, __LINE__), state_value + 1)
 
 #define CO_AWAIT_ALL(...) do{ \
-        cort_multi_awaitable* __tmp_cort = 0; \
+        size_t current_wait_count = 0; \
         CO_FOR_EACH(CO_AWAIT_MULTI_IMPL, __VA_ARGS__) \
-        if(__tmp_cort != 0){ \
+        if(current_wait_count != 0){ \
+            this->set_wait_count(current_wait_count); \
             this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static)); \
             return this; \
         } \
@@ -202,12 +184,12 @@ public: \
     CO_GOTO_NEXT_STATE \
     CORT_NEXT_STATE(CO_JOIN(CO_STATE_NAME, __LINE__))
 
-
 //After wait finished, it will not turn to next state but current. It behaves like a loop. It can not be used in any branch or loop.
 #define CO_AWAIT_BACK(sub_cort) do{ \
-        proto_type* the_sub_cort = (sub_cort)->start();\
-        if(the_sub_cort != 0){\
-            the_sub_cort->set_parent(this); \
+        proto_type* __the_sub_cort = (sub_cort)->start();\
+        if(__the_sub_cort != 0){\
+            __the_sub_cort->set_parent(this); \
+            this->set_wait_count(1); \
             this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value>::do_exec_static)); \
             return this; \
         }\
@@ -215,41 +197,24 @@ public: \
     goto ____action_begin; \
     CORT_NEXT_STATE(CO_JOIN(CO_STATE_NAME, __LINE__))
 
-#if (defined(__GNUC__))
 #define CO_AWAIT_MULTI_IMPL(sub_cort) {\
-    __typeof__(sub_cort) __tmp_cort_new = (sub_cort); \
-    CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
+    CO_AWAIT_MULTI_IMPL_IMPL(this, sub_cort) \
 }
 
-#elif (defined(_MSC_VER) && (_MSC_VER>=1600))
-#define CO_AWAIT_MULTI_IMPL(sub_cort) {\
-    auto __tmp_cort_new = (sub_cort); \
-    CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
-}
-
-#else
-#define CO_AWAIT_MULTI_IMPL(sub_cort) {\
-    cort_multi_awaitable * __tmp_cort_new = (sub_cort)->init(); \
-    CO_AWAIT_MULTI_IMPL_IMPL(this, __tmp_cort, __tmp_cort_new) \
-}
-#endif
-
-#define CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, __tmp_cort, __tmp_cort_new) {\
-    cort_multi_awaitable *new_result = __tmp_cort_new->start(); \
-    if(new_result != 0){ \
-        new_result->set_parent(this_ptr); \
-        if(__tmp_cort != 0){ \
-            __tmp_cort->push_back(new_result); \
-        } \
-        __tmp_cort = new_result; \
+#define CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, sub_cort) {\
+    cort_proto *__the_sub_cort = (sub_cort)->start(); \
+    if(__the_sub_cort != 0){ \
+        __the_sub_cort->set_parent(this_ptr); \
+        ++current_wait_count; \
     }\
 }
 
 #define CO_AWAIT_IMPL(sub_cort, cort_state_name, next_state) \
     do{ \
-        base_type* the_sub_cort = (sub_cort)->start();\
-        if(the_sub_cort != 0){\
-            the_sub_cort->set_parent(this); \
+        base_type* __the_sub_cort = (sub_cort)->start();\
+        if(__the_sub_cort != 0){\
+            __the_sub_cort->set_parent(this); \
+            this->set_wait_count(1); \
             this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, next_state>::do_exec_static)); \
             return this; \
         }\
@@ -276,16 +241,28 @@ public: \
 #define CO_RETURN() \
     return this->on_finish(); \
 
+//Sometimes you know you have to pause but you do not know why and when you can continue. 
+//Using CO_AWAIT_ANY(), others will use cort_proto::await to tell you what you should wait.
+//This is a useful interface for "Dependency Inversion": it enable the coroutine set 
+//the resume condition after pause.
+#define CO_AWAIT_ANY() do{ \
+        this->set_wait_count(0); \
+        this->set_run_function((run_type)(&cort_state_struct<CORT_BASE, state_value + 1>::do_exec_static)); \
+    }while(false); \
+    return this;   \
+    CO_GOTO_NEXT_STATE \
+    CORT_NEXT_STATE(CO_JOIN(CO_STATE_NAME, __LINE__))
+
 //Sometimes you want to stop the couroutine after a sub_coroutine is finished. Using CO_AWAIT_RETURN.
 //It must be used in a branch or loop, or else it must be followed by CO_END.
-//The "this" pointer and "sub_cort" must have the same base_type to avoid type degrade of the return result.
+
 #define CO_AWAIT_RETURN(sub_cort) \
     do{ \
-        base_type* the_sub_cort = (sub_cort)->start();\
-        if(the_sub_cort != 0){\
-            /*the_sub_cort->set_parent(this->cort_parent); \
-            Above codes is not needed the caller will set the return result */ \
-            return the_sub_cort; \
+        base_type* __the_sub_cort = (sub_cort)->start();\
+        if(__the_sub_cort != 0){\
+            /*__the_sub_cort->set_parent(this->cort_parent); \
+            Above codes is not needed */ \
+            return __the_sub_cort; \
         }\
         CO_RETURN(); \
     }while(false); 
@@ -296,14 +273,15 @@ public: \
 
 #include <iterator>
 template <typename T>
-cort_proto* cort_wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator){
-    cort_multi_awaitable* tmp_cort = 0;
+size_t cort_wait_range(cort_proto* this_ptr, T begin_forward_iterator, T end_forward_iterator){
+    size_t current_wait_count = 0;
     while(begin_forward_iterator != end_forward_iterator){
         typename std::iterator_traits<T>::value_type tmp_cort_new = (*begin_forward_iterator); 
-        CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, tmp_cort, tmp_cort_new) 
+        CO_AWAIT_MULTI_IMPL_IMPL(this_ptr, tmp_cort_new) 
         ++begin_forward_iterator;
     }
-    return tmp_cort;
+    this_ptr->set_wait_count(current_wait_count);
+    return current_wait_count;
 }
 
 #endif
